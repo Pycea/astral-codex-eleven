@@ -67,9 +67,210 @@ const templateOption = {
   processComment: (commentData, commentElem) => {}
 };
 
+// Only used to hold state. The actual work of adding HTML elements will be done
+// in the parseCommentText option below.
+const applyCommentStylingOption = {
+  key: 'applyCommentStyling',
+  default: true
+};
+
+// Implemented as an option, but will always be on. Adds links, and comment
+// styling if the option is enabled.
+const parseCommentTextOption = {
+  key: 'parseCommentText',
+  default: true,
+  processComment: (commentData, commentElem) => {
+    // Below is a beautiful regex to match URLs that may occur in text. It's
+    // tricky because we want to allow characters that occur in URLs that are
+    // technically reserved, while excluding characters that are likely intended
+    // as punctuation. For example:
+    //
+    //   - "(http://example.com/)" should match "http://example.com/" without
+    //      the surrounding parentheses.
+    //
+    //   - "http://example.com/(bla)" should match "http://example.com/(bla)"
+    //      with the parentheses included in the URL.
+    //
+    //   - "Read http://the-manual.com!" should match "http://the-manual.com"
+    //      without the exclamation mark.
+    //
+    // and so on. This is achieved by dividing the ASCII characters into the
+    // ones that are most likely part of the URL:
+    //
+    //    #$%&'*+-/<=>@&_|~ (as well as letters and digits)
+    //
+    // And those that are likely part of the punctuation, not the URL:
+    //
+    //    "!()*,.:;?`  (as well as non-ASCII Unicode characters like — or “”)
+    //
+    // And those that are part of the URL only if they are occur in pairs:
+    //
+    //    () {} []
+    //
+    // (so "http://example.com/foo+(bar)?a[1]=2" is parsed as a single URL).
+    //
+    // Additionally, we want to support backslash escapes, so that
+    // "http://example.com/a\ b\)c" matches as a single URL. Only non-
+    // alphanumeric characters can be escaped, so that we can unescape simply by
+    // dropping the slashes (\\ -> \, \; -> ;, etc.), without having to deal
+    // with complex sequences like \n, \0, \040, \x10 etc.
+    //
+    // Putting it together, the URL regex first matches http:// or https://
+    // (other protocols are intentionally not supported) and the rest of the
+    // string can be divided into parts that are either:
+    //
+    //  - A two-character escape sequence (\ followed by a non-alphanumeric
+    //    char).
+    //  - A sequence of non-space characters that ends with a character that is
+    //    likely part of the URL (#, _, etc.)
+    //  - A balanced bracket sequence like "(bla)" or "[bla]" or "{bla}".
+    //    Within, these sequences, escapes are allowed (e.g. "(bla\)bla)" or
+    //    "[\ ]"). Nested bracket sequences are not parsed; that's impossible.
+    //    So "[[]]" matches only the first three characters; to match all four
+    //    you must write "[[\]]" (note that escaping characters unnecessarily is
+    //    always allowed, so the same sequence can be safely written as
+    //    "\[\[\]\]").
+    const urlRegex = /(https?:\/\/(?:\\[^A-Z0-9]|[^\s(){}\[\]]*[A-Z0-9#$%&'+\-\/<=>@&_|~]|\((?:\\[^A-Z0-9]|[^\s)])*\)|\[(?:\\[^A-Z0-9]|[^\s\]])*\]|{(?:\\[^A-Z0-9]|[^\s}])*})+)/i;
+
+    // The email regex is much simpler, since I assume it always ends with a TLD
+    // that consists of alphanumeric characters or hyphens. This is not perfect,
+    // but I'm not going to support esoteric features like embedded comments,
+    // IP-based hosts, quoted usernames, non-Latin usernames, and so on.
+    const emailRegex = /([A-Z0-9!#$%&'*+\-/=?^_`{|}~.]+@[^\s]+\.[A-Z0-9\-]*[A-Z]+)/i;
+
+    // The regexes for asterisks and underscores match pairs of symbols with
+    // certain restrictions. The first symbol of the pair should be preceeded by
+    // a space, a bracket, or another of the same symbol, and the symbol after
+    // it should not be a space or another asterisk. Similarly, the second of
+    // the pair should not be preceeded by a space or another of the same
+    // symbol. This will catch the intended use case of italicising things like
+    //
+    //   - *words*
+    //   - _phrases of words_
+    //   - **extra important things**
+    //   - (_things in parens_)
+    //
+    // but not catching other uses such as
+    //
+    //   - * asterisks used as lists
+    //   - multiplication 2 * 2 * 2 = 8
+    const asteriskRegex = /(?<=^|\s|\(|\[|\{|\*)\*(?=[^*\s])(.*?)(?<=[^*\s])\*/;
+    const underscoreRegex = /(?<=^|\s|\(|\[|\{|_)_(?=[^_\s])(.*?)(?<=[^_\s])_/;
+    const blockQuoteRegex = /^\s*>\s*/;
+
+    if (!commentData.body) return;
+    // Do a quick check to skip over cases where no formatting is necessary.
+    const scanRegex = optionShadow.applyCommentStyling ? /[*_>@:]/ : /[:@]/;
+    if (!scanRegex.test(commentData.body)) return;
+
+    // Split a string into parts based off the regex, and turn the matched parts
+    // into tags.
+    // "string *with* italics" => ["string ", <em>with</em>, " italics"]
+    function splitStringByRegex(regex, matchToTagFunc, string) {
+      const list = [];
+      let match;
+      while (regex && (match = string.match(regex))) {
+        const matchLength = match[0].length;
+        const matchText = match[1];
+
+        if (match.index > 0) list.push(string.substring(0, match.index));
+        list.push(matchToTagFunc(matchText));
+        string = string.substring(match.index + matchLength);
+      }
+
+      if (string) list.push(string);
+      return list;
+    }
+
+    function splitListByRegex(regex, matchToTagFunc, list) {
+      return list.map(e => typeof e === 'string' ? splitStringByRegex(regex, matchToTagFunc, e) : e).flat();
+    }
+
+    function italicToTag(text) {
+      const em = document.createElement('em');
+      em.textContent = text;
+      return em;
+    }
+
+    function urlToTag(url) {
+      function unescapeUrl(s) {
+        return s.replace(/\\([^A-Z0-9])/ig, '$1');
+      }
+
+      const a = document.createElement('a');
+      a.className = 'linkified';
+      a.href = unescapeUrl(url);
+      a.target = '_blank';
+      a.rel = 'nofollow ugc noopener';
+      a.textContent = url;
+      return a;
+    }
+
+    function emailToTag(email) {
+      const a = document.createElement('a');
+      a.className = 'linkified';
+      a.href = `mailto:${email}`;
+      a.textContent = email;
+      return a;
+    }
+
+    const commentParagraphs = [];
+    for (let paragraph of commentData.body.split(/\n+/)) {
+      if (!paragraph) continue;
+
+      const container = document.createElement('p');
+      let quoteContainer = container;
+
+      let list = [paragraph];
+      list = splitListByRegex(urlRegex, urlToTag, list);
+      list = splitListByRegex(emailRegex, emailToTag, list);
+      if (optionShadow.applyCommentStyling) {
+        list = splitListByRegex(asteriskRegex, italicToTag, list);
+        list = splitListByRegex(underscoreRegex, italicToTag, list);
+
+        // Special case for blockquotes
+        let quoteIndent = 0;
+        const oldFirstPart = list[0];
+        if (typeof list[0] === 'string') {
+          let match;
+          while (match = list[0].match(blockQuoteRegex)) {
+            quoteIndent++;
+            list[0] = list[0].substring(match[0].length);
+          }
+
+          if (!list[0].trim().length) {
+            quoteIndent = 0;
+            list[0] = oldFirstPart;
+          }
+        }
+
+        for (let i = 0; i < quoteIndent; i++) {
+          const b = document.createElement('blockquote');
+          quoteContainer.appendChild(b);
+          quoteContainer = b;
+        }
+      }
+
+      for (let part of list) {
+        if (typeof part === 'string') {
+          part = document.createTextNode(part);
+        }
+        quoteContainer.appendChild(part);
+      }
+
+      commentParagraphs.push(container);
+    }
+
+    const oldCommentBody = commentElem.querySelector('.comment-body');
+    oldCommentBody.replaceChildren(...commentParagraphs);
+  },
+};
+
 // All options should be added here.
 const optionArray = [
   // templateOption,
+  applyCommentStylingOption,
+  parseCommentTextOption,
 ];
 
 const LOG_OPTION_TAG = '[Astral Codex Eleven] [Option]';
@@ -111,7 +312,7 @@ function initializeOptionValues() {
       optionShadow[key] = option.default;
     }
 
-    if (typeof(option.onLoad) === 'function') {
+    if (typeof option.onLoad === 'function') {
       option.onLoad(optionShadow[key]);
     }
   }
@@ -120,7 +321,7 @@ function initializeOptionValues() {
 
 function storageChangeHandler(changes, namespace) {
   if (namespace !== 'local' || !changes[OPTION_KEY]
-      || typeof(changes[OPTION_KEY].newValue) !== 'object') {
+      || typeof changes[OPTION_KEY].newValue !== 'object') {
     return;
   }
 
@@ -138,7 +339,7 @@ function storageChangeHandler(changes, namespace) {
 }
 
 function isValidOption(option) {
-  if (typeof(option.key) !== 'string') {
+  if (typeof option.key !== 'string') {
     return [false, 'must contain property "key" as a string'];
   }
 
@@ -146,19 +347,19 @@ function isValidOption(option) {
     return [false, 'must contain a default value'];
   }
 
-  if (option.hasOwnProperty('onValueChange') && typeof(option.onValueChange) !== 'function') {
+  if (option.hasOwnProperty('onValueChange') && typeof option.onValueChange !== 'function') {
     return [false, 'onValueChange must be a function if defined'];
   }
 
-  if (option.hasOwnProperty('onLoad') && typeof(option.onLoad) !== 'function') {
+  if (option.hasOwnProperty('onLoad') && typeof option.onLoad !== 'function') {
     return [false, 'onLoad must be a function if defined'];
   }
 
-  if (option.hasOwnProperty('processComment') && typeof(option.processComment) !== 'function') {
+  if (option.hasOwnProperty('processComment') && typeof option.processComment !== 'function') {
     return [false, 'processComment must be a function if defined'];
   }
 
-  if (option.hasOwnProperty('processHeader') && typeof(option.processHeader) !== 'function') {
+  if (option.hasOwnProperty('processHeader') && typeof option.processHeader !== 'function') {
     return [false, 'processHeader must be a function if defined'];
   }
 

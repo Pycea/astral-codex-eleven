@@ -126,6 +126,11 @@ a:focus {
   overflow-y: initial !important;
 }
 
+.ext-comments .comment .comment-body blockquote {
+  padding-left: 8px;
+  margin-left: 0;
+}
+
 .ext-comments .comment .missing {
   font-style: italic;
 }

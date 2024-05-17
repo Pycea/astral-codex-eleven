@@ -143,6 +143,27 @@ const {
     }
   };
 
+  const showFullDateOption = {
+    key: 'showFullDate',
+    default: false,
+    descriptionShort: 'Show full comment date',
+    descriptionLong: 'Show the full date and time when a comment was posted and edited.',
+    onStart(currentValue) {
+      addStyle(this.key);
+      setStyleEnabled(this.key, currentValue);
+    },
+    onValueChange(newValue) {
+      setStyleEnabled(this.key, newValue);
+    }
+  };
+
+  const use24HourOption = {
+    key: 'use24Hour',
+    default: false,
+    descriptionShort: 'Use 24 hour time',
+    descriptionLong: 'Use 24 hour time for the full date.',
+  };
+
   const hideUsersOption = {
     key: 'hideUsers',
     default: '',
@@ -231,6 +252,8 @@ const {
     zenModeOption,
     defaultSortOption,
     collapseDepthOption,
+    showFullDateOption,
+    use24HourOption,
     hideUsersOption,
     timeFormatOption,
   ];

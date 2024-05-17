@@ -162,6 +162,9 @@ const {
     default: false,
     descriptionShort: 'Use 24 hour time',
     descriptionLong: 'Use 24 hour time for the full date.',
+    onValueChange(newValue) {
+      OPTIONS.timeFormat.onValueChange(null);
+    }
   };
 
   const hideUsersOption = {
@@ -193,12 +196,19 @@ const {
     default: null,
     descriptionShort: 'Time formatting',
     descriptionLong: 'Time formatting but long.',
-    onStart(currentValue) {
-      this.dateFormatShort = new Intl.DateTimeFormat('en-US', {
-        month: 'short', day: 'numeric'});
-      this.dateFormatLong = new Intl.DateTimeFormat('en-US', {
+    shortDateFormat: new Intl.DateTimeFormat('en-US', {month: 'short', day: 'numeric'}),
+    onValueChange(newValue) {
+      processComments(this);
+    },
+    formatShortDate(date) {
+      return this.shortDateFormat.format(date);
+    },
+    formatLongDate(date) {
+      const use12Hour = !getOption('use24Hour');
+      const format = new Intl.DateTimeFormat('en-US', {
         month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit',
-        minute: '2-digit', second: '2-digit', timeZoneName: 'short'});
+        minute: '2-digit', second: '2-digit', hour12: use12Hour});
+      return format.format(date);
     },
     // Formats `date` as a string like "5 mins ago" or "1 hr ago" if it is
     // between `now` and `now` minus 24 hours, or returns undefined otherwise.
@@ -222,9 +232,9 @@ const {
       parentElem.classList.add('date');
       parentElem.tabIndex = 0;
       const date = new Date(dateString);
-      const shortDate = this.formatRecentDate(Date.now(), date) || this.dateFormatShort.format(date);
+      const shortDate = this.formatRecentDate(Date.now(), date) || this.formatShortDate(date);
       createElement(parentElem, 'span', 'short', shortDate);
-      createElement(parentElem, 'span', 'long', this.dateFormatLong.format(date));
+      createElement(parentElem, 'span', 'long', this.formatLongDate(date));
     },
     processComment(currentValue, commentComponent) {
       const id = commentComponent.commentData.id;
@@ -232,6 +242,7 @@ const {
       const editDate = commentComponent.commentData.edited_at;
 
       const timeDiv = commentComponent.commentDiv.querySelector(':scope > .comment-meta > .comment-timestamps');
+      timeDiv.replaceChildren();
       const postDateDiv = createElement(timeDiv, 'a', 'posted-date');
       postDateDiv.href = `${document.location.pathname}/comment/${id}`;
       postDateDiv.rel = 'nofollow';

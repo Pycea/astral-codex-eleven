@@ -249,26 +249,41 @@ class ExtCommentComponent {
   //  - parentCommentComponent is the ExtCommentComponent corresponding to this
   //    comments parent, or undefined if this is a toplevel comment.
   //  - options is the object passed to replaceComments().
-  //
   constructor(parentElem, comment, parentCommentComponent, options) {
-    // Constructs a Substack profile link from the comment data.
-    //
-    // The exact way profile URLs are created isn't clear, but it seems that
-    // there are two systems used:
-    //   1. A profile URL at '/profile/*' created with the the user id and user
-    //      name parts
-    //   2. A handle URL at '/@handle', which is the newer system
-    //
-    // What seems to work is checking if comment.handle exists, and if it does,
-    // then using it in the handle version of the URL. If not, then using the
-    // value of comment.user_slug in the profile version.
-    function makeProfileUrl(comment) {
-      if (!comment.handle && !comment.user_slug) return;
-      const suffix = comment.handle ? `@${comment.handle}` : `profile/${comment.user_slug}`;
-      return `https://substack.com/${suffix}`;
+    function getCommentAttributes(comment) {
+      const attributes = {
+        authorName: null,
+        profileUrl: null,
+        bodyText: null
+      };
+
+      if (comment.deleted) {
+        attributes.authorName = 'deleted';
+        attributes.bodyText = 'Comment deleted';
+      } else if (comment.suppressed) {
+        attributes.authorName = 'removed';
+        attributes.bodyText = 'Comment removed';
+      } else {
+        // The exact way profile URLs are created isn't clear, but it seems that
+        // there are two systems used:
+        //   1. A profile URL at '/profile/*' created with the the user id and
+        //      user name parts
+        //   2. A handle URL at '/@handle', which is the newer system
+        //
+        // What seems to work is checking if comment.handle exists, and if it
+        // does, then using it in the handle version of the URL. If not, then
+        // using the value of comment.user_slug in the profile version.
+        const suffix = comment.handle ? `@${comment.handle}` : `profile/${comment.user_slug}`;
+        attributes.authorName = `${comment.name} ${comment.user_banned ? ' (Banned)' : ''}`;
+        attributes.profileUrl = `https://substack.com/${suffix}`;
+        attributes.bodyText = comment.body;
+      }
+
+      return attributes;
     }
 
     const depth = parentCommentComponent ? parentCommentComponent.depth + 1 : 0;
+    const {authorName, profileUrl, bodyText} = getCommentAttributes(comment);
 
     const threadDiv = createElement(parentElem, 'div', 'comment-thread');
 
@@ -276,8 +291,7 @@ class ExtCommentComponent {
     const borderDiv = createElement(threadDiv, 'div', 'border');
     borderDiv.onclick = this.toggleExpandedInteractive.bind(this);
     // Add profile picture to the top of the border.
-    createElement(borderDiv, 'img', 'user-icon')
-        .src = getUserIconUrl(comment);
+    createElement(borderDiv, 'img', 'user-icon').src = getUserIconUrl(comment);
     // Finally, add a vertical line that covers the remaining space.
     createElement(borderDiv, 'div', 'line');
 
@@ -287,15 +301,11 @@ class ExtCommentComponent {
     commentDiv.onkeydown = this.handleKeyDown.bind(this);
     const commentHeader = createElement(commentDiv, 'header', 'comment-meta');
     const authorSpan = createElement(commentHeader, 'span', 'commenter-name');
-    const profileUrl = makeProfileUrl(comment);
+
     if (profileUrl) {
-      const displayName = `${comment.name} ${comment.user_banned ? ' (Banned)' : ''}`;
-      createElement(authorSpan, 'a', undefined, displayName).href = profileUrl;
-    } else if (typeof comment.name === 'string') {
-      // Not sure if this can happen: name is present but id is missing.
-      createTextNode(authorSpan, comment.name);
+      createElement(authorSpan, 'a', undefined, authorName).href = profileUrl;
     } else {
-      createTextNode(authorSpan, comment.deleted ? 'deleted' : 'unavailable');
+      createTextNode(authorSpan, authorName);
       authorSpan.classList.add('missing');
     }
 
@@ -313,11 +323,10 @@ class ExtCommentComponent {
 
     // Substack assigns special rendering to class="comment-body"
     const commentBody = createElement(commentDiv, 'div', 'comment-body');
-    if (comment.body == null) {
-      createTextNode(commentBody, comment.deleted ? "deleted" : "unavailable");
+    this.appendCommentText(commentBody, bodyText);
+    // A null profile url only occurs when a comment is deleted or removed.
+    if (!profileUrl) {
       commentBody.classList.add('missing');
-    } else {
-      this.appendCommentText(commentBody, comment.body);
     }
 
     const replyHolder = createElement(contentDiv, 'div', 'reply-holder');

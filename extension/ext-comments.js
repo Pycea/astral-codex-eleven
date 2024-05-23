@@ -251,36 +251,21 @@ class ExtCommentComponent {
   //  - options is the object passed to replaceComments().
   //
   constructor(parentElem, comment, parentCommentComponent, options) {
-    // Constructs a Substack profile link from a user id and name.
+    // Constructs a Substack profile link from the comment data.
     //
-    // I don't know the exact algorithm, but based on observation, I determined
-    // that the username is transformed into a suffix as follows:
+    // The exact way profile URLs are created isn't clear, but it seems that
+    // there are two systems used:
+    //   1. A profile URL at '/profile/*' created with the the user id and user
+    //      name parts
+    //   2. A handle URL at '/@handle', which is the newer system
     //
-    //  - characters other than ASCII letters, digits, underscores, and hyphens
-    //    are deleted (notably, letters in foreign scripts are stripped, as are
-    //    periods, which are technically URL-safe).
-    //  - spaces are converted to hyphens, except leading/trailing spaces, which
-    //    are trimmed.
-    //  - letters are converted to lower case
-    //
-    // For example:
-    //
-    // "TimW"            -> https://substack.com/profile/1234567-timw
-    // "A.M. Charlebois" -> https://substack.com/profile/1234567-am-charlebois
-    // "Анна Musk"       -> https://substack.com/profile/1234567-musk
-    //
-    // There are some details I don't know:
-    //
-    //  - are consecutive spaces mapped to a single hyphen, or multiple?
-    //  - if the suffix is empty, is the trailing hyphen omitted?
-    //
-    // Nevertheless, the algorithm implemented here seems to work for most users.
-    function makeProfileUrl(id, name) {
-      if (!Number.isInteger(id)) return undefined;
-      if (typeof(name) !== 'string') return undefined;
-      const suffix = name.replaceAll(/[^0-9a-zA-Z _-]/g, '')
-          .trim().replaceAll(/ +/g, '-').toLowerCase();
-      return `https://substack.com/profile/${id}-${suffix}`;
+    // What seems to work is checking if comment.handle exists, and if it does,
+    // then using it in the handle version of the URL. If not, then using the
+    // value of comment.user_slug in the profile version.
+    function makeProfileUrl(comment) {
+      if (!comment.handle && !comment.user_slug) return;
+      const suffix = comment.handle ? `@${comment.handle}` : `profile/${comment.user_slug}`;
+      return `https://substack.com/${suffix}`;
     }
 
     const depth = parentCommentComponent ? parentCommentComponent.depth + 1 : 0;
@@ -302,7 +287,7 @@ class ExtCommentComponent {
     commentDiv.onkeydown = this.handleKeyDown.bind(this);
     const commentHeader = createElement(commentDiv, 'header', 'comment-meta');
     const authorSpan = createElement(commentHeader, 'span', 'commenter-name');
-    const profileUrl = makeProfileUrl(comment.user_id, comment.name);
+    const profileUrl = makeProfileUrl(comment);
     if (profileUrl) {
       const displayName = `${comment.name} ${comment.user_banned ? ' (Banned)' : ''}`;
       createElement(authorSpan, 'a', undefined, displayName).href = profileUrl;

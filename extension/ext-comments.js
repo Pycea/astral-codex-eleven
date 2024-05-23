@@ -304,7 +304,8 @@ class ExtCommentComponent {
     const authorSpan = createElement(commentHeader, 'span', 'commenter-name');
     const profileUrl = makeProfileUrl(comment.user_id, comment.name);
     if (profileUrl) {
-      createElement(authorSpan, 'a', undefined, comment.name).href = profileUrl;
+      const displayName = `${comment.name} ${comment.user_banned ? ' (Banned)' : ''}`;
+      createElement(authorSpan, 'a', undefined, displayName).href = profileUrl;
     } else if (typeof comment.name === 'string') {
       // Not sure if this can happen: name is present but id is missing.
       createTextNode(authorSpan, comment.name);

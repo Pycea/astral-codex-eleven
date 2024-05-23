@@ -163,7 +163,7 @@ const {
     descriptionShort: 'Use 24 hour time',
     descriptionLong: 'Use 24 hour time for the full date.',
     onValueChange(newValue) {
-      OPTIONS.timeFormat.onValueChange(null);
+      OPTIONS.dateFormat.onValueChange(null);
     }
   };
 
@@ -191,68 +191,28 @@ const {
 
   // This will handle formatting the comment time, but will use the value of
   // other options and not be directly settable itself.
-  const timeFormatOption = {
-    key: 'timeFormat',
+  const dateFormatOption = {
+    key: 'dateFormat',
     default: null,
     descriptionShort: 'Time formatting',
     descriptionLong: 'Time formatting but long.',
-    shortDateFormat: new Intl.DateTimeFormat('en-US', {month: 'short', day: 'numeric'}),
-    onValueChange(newValue) {
-      processComments(this);
-    },
-    formatShortDate(date) {
-      return this.shortDateFormat.format(date);
-    },
-    formatLongDate(date) {
+    updateFormats() {
       const use12Hour = !getOption('use24Hour');
-      const format = new Intl.DateTimeFormat('en-US', {
+      this.shortFormat = new Intl.DateTimeFormat('en-US', {
+        month: 'short', day: 'numeric'});
+      this.longFormat = new Intl.DateTimeFormat('en-US', {
         month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit',
         minute: '2-digit', second: '2-digit', hour12: use12Hour});
-      return format.format(date);
     },
-    // Formats `date` as a string like "5 mins ago" or "1 hr ago" if it is
-    // between `now` and `now` minus 24 hours, or returns undefined otherwise.
-    formatRecentDate(now, date) {
-      const minuteMillis = 60 * 1000;
-      const hourMillis = 60 * minuteMillis;
-      const dayMillis = 24 * hourMillis;
-      const timeAgoMillis = now - date;
-      if (timeAgoMillis < 0) return undefined; // date is in the future?!
-      if (timeAgoMillis < hourMillis) {
-        const mins = Math.floor(timeAgoMillis / minuteMillis);
-        return `${mins} ${mins === 1 ? 'min' : 'mins'} ago`;
-      }
-      if (timeAgoMillis < dayMillis) {
-        const hrs = Math.floor(timeAgoMillis / hourMillis);
-        return `${hrs} ${hrs === 1 ? 'hr' : 'hrs'} ago`;
-      }
-      return undefined; // date is more than a day ago.
+    onValueChange(newValue) {
+      this.updateFormats();
+      processComments(this);
     },
-    createDate(parentElem, dateString) {
-      parentElem.classList.add('date');
-      parentElem.tabIndex = 0;
-      const date = new Date(dateString);
-      const shortDate = this.formatRecentDate(Date.now(), date) || this.formatShortDate(date);
-      createElement(parentElem, 'span', 'short', shortDate);
-      createElement(parentElem, 'span', 'long', this.formatLongDate(date));
+    onStart(currentValue) {
+      this.updateFormats();
     },
     processComment(currentValue, commentComponent) {
-      const id = commentComponent.commentData.id;
-      const postDate = commentComponent.commentData.date;
-      const editDate = commentComponent.commentData.edited_at;
-
-      const timeDiv = commentComponent.commentDiv.querySelector(':scope > .comment-meta > .comment-timestamps');
-      timeDiv.replaceChildren();
-      const postDateDiv = createElement(timeDiv, 'a', 'posted-date');
-      postDateDiv.href = `${document.location.pathname}/comment/${id}`;
-      postDateDiv.rel = 'nofollow';
-      this.createDate(postDateDiv, postDate);
-
-      if (typeof editDate === 'string') {
-        createElement(timeDiv, 'span', 'edited-sep', '·');
-        const editedDateDiv = createElement(timeDiv, 'span', 'edited-date', 'edited ');
-        this.createDate(editedDateDiv, editDate);
-      }
+      commentComponent.setDateFormat(this.shortFormat, this.longFormat);
     }
   };
 
@@ -266,7 +226,7 @@ const {
     showFullDateOption,
     use24HourOption,
     hideUsersOption,
-    timeFormatOption,
+    dateFormatOption,
   ];
 
   const LOG_TAG = '[Astral Codex Eleven] [Option]';
@@ -279,6 +239,11 @@ const {
 
   // Apply `processComment` from the given key to all ExtCommentComponents
   function processComments(option) {
+    if (!option) {
+      console.warn(`Invalid option passed to processComment`);
+      return;
+    }
+
     if (!(option.processComment instanceof Function)) {
       console.warn(`No processComment function for key '${option.key}'`);
       return;

@@ -142,6 +142,44 @@ function createTextNode(parent, text) {
   return node;
 }
 
+// Formats `date` as a string like "5 mins ago" or "1 hr ago" if it is
+// between `now` and `now` minus 24 hours, or returns undefined otherwise.
+function formatRecentDate(now, date) {
+  const minuteMillis = 60 * 1000;
+  const hourMillis = 60 * minuteMillis;
+  const dayMillis = 24 * hourMillis;
+  const timeAgoMillis = now - date;
+  if (timeAgoMillis < 0) return undefined; // date is in the future?!
+  if (timeAgoMillis < hourMillis) {
+    const mins = Math.floor(timeAgoMillis / minuteMillis);
+    return `${mins} ${mins === 1 ? 'min' : 'mins'} ago`;
+  }
+  if (timeAgoMillis < dayMillis) {
+    const hrs = Math.floor(timeAgoMillis / hourMillis);
+    return `${hrs} ${hrs === 1 ? 'hr' : 'hrs'} ago`;
+  }
+  return undefined; // date is more than a day ago.
+}
+
+class ExtDateComponent {
+  constructor(parentElem, dateString) {
+    parentElem.classList.add('date');
+    parentElem.tabIndex = 0;
+    this.dateString = dateString;
+    this.shortDateSpan = createElement(parentElem, 'span', 'short', dateString);
+    this.longDateSpan = createElement(parentElem, 'span', 'long', dateString);
+  }
+
+  setDateFormat(shortFormat, longFormat) {
+    // We could also convert to Date in the constructor instead of here, but I
+    // think the current solution is more memory-efficient, and typically
+    // setting the date format only happens once.
+    const date = new Date(this.dateString);
+    this.shortDateSpan.textContent = formatRecentDate(Date.now(), date) || shortFormat.format(date);
+    this.longDateSpan.textContent = longFormat.format(date);
+  }
+}
+
 class ExtCommentListComponent {
   static assignSiblings(children) {
     const n = children.length;
@@ -251,7 +289,7 @@ class ExtCommentComponent {
 
     // Create div for the border. This can be clicked to collapse/expand comments.
     const borderDiv = createElement(threadDiv, 'div', 'border');
-    borderDiv.onclick = this.toggleExpanded.bind(this);
+    borderDiv.onclick = this.toggleExpandedInteractive.bind(this);
     // Add profile picture to the top of the border.
     createElement(borderDiv, 'img', 'user-icon')
         .src = getUserIconUrl(comment);
@@ -275,7 +313,17 @@ class ExtCommentComponent {
       authorSpan.classList.add('missing');
     }
 
-    createElement(commentHeader, 'span', 'comment-timestamps');
+    const postDateLink = createElement(commentHeader, 'a', 'comment-timestamp');
+    postDateLink.href = `${document.location.pathname}/comment/${comment.id}`;
+    postDateLink.rel = 'nofollow';
+    const postDate = new ExtDateComponent(postDateLink, comment.date);
+
+    let editDate = null;
+    if (typeof comment.edited_at === 'string') {
+      createTextNode(commentHeader, '·');
+      const editedIndicator = createElement(commentHeader, 'span', 'edited-indicator', 'edited ');
+      editDate = new ExtDateComponent(editedIndicator, comment.edited_at);
+    }
 
     // Substack assigns special rendering to class="comment-body"
     const commentBody = createElement(commentDiv, 'div', 'comment-body');
@@ -290,6 +338,8 @@ class ExtCommentComponent {
     const editHolder = createElement(contentDiv, 'div', 'edit-holder');
 
     this.options     = options;
+    this.postDate    = postDate;
+    this.editDate    = editDate;
     this.commentData = comment;
     this.threadDiv   = threadDiv;
     this.headerDiv   = commentHeader;
@@ -301,7 +351,6 @@ class ExtCommentComponent {
     this.nextSibling = undefined;
     this.childList =
         new ExtCommentListComponent(contentDiv, comment.children ?? [], this, options);
-
 
     if (!comment.deleted && options.userId) {
       const replySeparator = createElement(commentHeader, 'span', 'reply-sep', '·');
@@ -327,6 +376,11 @@ class ExtCommentComponent {
     }
   }
 
+  setDateFormat(shortFormat, longFormat) {
+    this.postDate.setDateFormat(shortFormat, longFormat);
+    this.editDate?.setDateFormat(shortFormat, longFormat);
+  }
+
   connectReplyButton(replyHolder, replyLink, toHide) {
     replyLink.onclick = (ev) => {
       ev.stopPropagation();
@@ -346,9 +400,10 @@ class ExtCommentComponent {
       ev.preventDefault();
       new CommentEditorComponent(editHolder, toHide, this.commentData.body, async (body) => {
         if (body && body !== this.commentData.body) {
-          const comment = await this.options.commentApi.editComment(this.commentData.id, body);
+          const newCommentData = await this.options.commentApi.editComment(this.commentData.id, body);
           commentBodyDiv.replaceChildren();
-          this.appendCommentText(commentBodyDiv, comment.body);
+          this.appendCommentText(commentBodyDiv, newCommentData.body);
+          this.commentData = newCommentData;
         }
       });
     };
@@ -361,7 +416,7 @@ class ExtCommentComponent {
       if (confirm('Are you sure you want to delete this comment?')) {
         try {
           await this.options.commentApi.deleteComment(this.commentData.id);
-          commentBodyDiv.innerText = 'deleted';
+          commentBodyDiv.textContent = 'deleted';
           commentBodyDiv.classList.add('missing');
           for (const elem of toDelete) elem.remove();
         } catch (e) {
@@ -414,21 +469,23 @@ class ExtCommentComponent {
     this.expanded = expanded;
     this.threadDiv.classList.toggle('collapsed', !expanded);
     this.threadDiv.classList.toggle('expanded', expanded);
-
-    // Ensure the comment is in view, to avoid scrolling past comments below a
-    // collapsed thread. (This also applies to expanding, for consistency.)
-    // See: https://github.com/maksverver/astral-codex-eleven/issues/3
-    if (this.commentDiv.getBoundingClientRect().top < 0) {
-      this.commentDiv.scrollIntoView();
-    }
   }
 
-  toggleExpanded() {
+  // Toggle expanded state trigged by a user action. Besides flipping the
+  // expanded state, this scrolls the top of the comment into view, to avoid
+  // scrolling past comments below the collapsed thread:
+  // https://github.com/maksverver/astral-codex-eleven/issues/3
+  toggleExpandedInteractive() {
     this.setExpanded(!this.expanded);
+    this.scrollIntoView();
   }
 
   focus() {
     this.commentDiv.focus();
+    this.scrollIntoView();
+  }
+
+  scrollIntoView() {
     // Make sure the top of the comment is visible after it is focused:
     if (this.commentDiv.getBoundingClientRect().top < 0) {
       this.commentDiv.scrollIntoView();
@@ -472,7 +529,7 @@ class ExtCommentComponent {
     switch (ev.code) {
       case 'Enter':
       case 'NumpadEnter':
-        this.toggleExpanded();
+        this.toggleExpandedInteractive();
         break;
 
       case 'KeyH':
